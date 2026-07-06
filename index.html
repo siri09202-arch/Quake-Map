@@ -1,0 +1,1384 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NHK風 震度分布図メーカー</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson-client@3"></script>
+    <style>
+        /* スクロールバー非表示 */
+        ::-webkit-scrollbar { display: none; }
+        body { 
+            margin: 0; 
+            padding: 0; 
+            overflow: hidden; 
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; 
+        }
+        /* セレクトボックス */
+        select option { background-color: #1f2937; color: white; }
+
+        /* NHK風テロップのテキスト袋文字風影効果 */
+        .outline-text {
+            text-shadow: 
+                -2px -2px 0 #000,  
+                 2px -2px 0 #000,
+                -2px  2px 0 #000,
+                 2px  2px 0 #000,
+                -2px  0px 0 #000,
+                 2px  0px 0 #000,
+                 0px -2px 0 #000,
+                 0px  2px 0 #000,
+                 2px  2px 5px rgba(0,0,0,0.8);
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col bg-gray-900 text-white select-none">
+
+    <!-- コントロールパネル (操作用ヘッダー) -->
+    <header id="header" class="bg-gray-800 p-3 shadow-lg z-30 flex flex-col gap-2 shrink-0 border-b border-gray-700">
+        <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
+            
+            <!-- タイトルとメイン操作 -->
+            <div class="flex flex-wrap items-center gap-2">
+                <h1 class="text-lg font-bold flex items-center gap-1.5 shrink-0 text-yellow-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                    NHK風 震度分布図プロ
+                </h1>
+                
+                <!-- モード切替 -->
+                <div class="bg-gray-700 p-0.5 rounded-md flex text-xs">
+                    <button id="mode-shindo" class="bg-blue-600 px-2.5 py-1 rounded font-bold transition-all">震度配置</button>
+                    <button id="mode-epicenter" class="hover:bg-gray-600 px-2.5 py-1 rounded transition-all text-gray-300">震源地配置</button>
+                </div>
+            </div>
+
+            <!-- パネル情報入力エリア -->
+            <div class="flex flex-wrap items-center gap-2 text-sm w-full lg:w-auto">
+                <div class="flex items-center gap-1 bg-gray-700/60 px-2 py-1 rounded border border-gray-600 flex-grow sm:flex-grow-0">
+                    <span class="text-xs text-gray-300 whitespace-nowrap font-bold">発生日時:</span>
+                    <input type="text" id="input-time" value="1日 8時40分ごろ" class="bg-gray-800 text-white px-1 py-0.5 rounded text-xs w-28 border border-gray-600 outline-none focus:border-blue-500">
+                </div>
+                <div class="flex items-center gap-1 bg-gray-700/60 px-2 py-1 rounded border border-gray-600">
+                    <span class="text-xs text-gray-300 whitespace-nowrap font-bold">規模:</span>
+                    <input type="text" id="input-mag" value="5.1" class="bg-gray-800 text-white px-1 py-0.5 rounded text-xs w-10 border border-gray-600 outline-none focus:border-blue-500 text-center">
+                </div>
+                <div class="flex items-center gap-1 bg-gray-700/60 px-2 py-1 rounded border border-gray-600">
+                    <span class="text-xs text-gray-300 whitespace-nowrap font-bold">最大震度:</span>
+                    <select id="select-max-shindo" class="bg-gray-800 text-white px-1 py-0.5 rounded text-xs border border-gray-600 outline-none">
+                        <option value="7">7</option>
+                        <option value="6強">6強</option>
+                        <option value="6弱">6弱</option>
+                        <option value="5強">5強</option>
+                        <option value="5弱">5弱</option>
+                        <option value="4" selected>4</option>
+                        <option value="3">3</option>
+                        <option value="2">2</option>
+                        <option value="1">1</option>
+                    </select>
+                </div>
+                <!-- 自由記入の市区町村リスト -->
+                <div class="flex items-center gap-1 bg-gray-700/60 px-2 py-1 rounded border border-gray-600 flex-grow">
+                    <span class="text-xs text-gray-300 whitespace-nowrap font-bold">左テロップ市区町村 (改行区切り):</span>
+                    <textarea id="input-towns" rows="1" class="bg-gray-800 text-white px-1.5 py-0.5 rounded text-xs flex-grow border border-gray-600 outline-none focus:border-blue-500 resize-none" placeholder="延岡市&#10;日向市">延岡市&#10;日向市&#10;西都市&#10;川南町&#10;都農町&#10;門川町&#10;宮崎美郷町</textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex flex-col xl:flex-row gap-3 justify-between items-stretch xl:items-center pt-2 border-t border-gray-700/50">
+            
+            <div class="flex flex-col sm:flex-row gap-2 flex-grow max-w-5xl">
+                <!-- P2PQuakeデータ読み込み機能 -->
+                <div class="flex items-center gap-1.5 text-xs bg-gray-700/60 px-2 py-1 rounded border border-green-700/50 flex-grow shadow-[0_0_10px_rgba(34,197,94,0.1)]">
+                    <span class="text-green-400 font-bold whitespace-nowrap">📡 P2P実データ:</span>
+                    <select id="p2p-history-select" class="bg-gray-900 text-white px-1.5 py-1 rounded border border-gray-600 flex-grow text-[11px] outline-none focus:border-green-500 cursor-pointer">
+                        <option value="">(P2PQuake APIから過去の地震履歴を取得中...)</option>
+                    </select>
+                    <button id="btn-load-p2p" class="bg-green-700 hover:bg-green-600 transition-colors px-2.5 py-1 rounded text-white font-bold whitespace-nowrap shadow-sm text-xs flex items-center gap-1 border border-green-500">
+                        読込・自動配置
+                    </button>
+                </div>
+
+                <!-- 手動 地域選択 -->
+                <div class="flex items-center gap-1.5 text-xs bg-gray-700/40 px-2 py-1 rounded border border-gray-600/60 flex-grow sm:max-w-xs">
+                    <span class="text-gray-300 font-bold whitespace-nowrap">手動追加:</span>
+                    <select id="region-select" class="bg-gray-800 text-white px-1.5 py-1 rounded border border-gray-600 flex-grow text-[11px] outline-none focus:border-blue-400 cursor-pointer">
+                        <option value="">(地図クリック または選択)</option>
+                        <!-- JavaScriptで追加 -->
+                    </select>
+                    <button id="btn-add-region" class="bg-blue-600 hover:bg-blue-500 transition-colors px-2.5 py-1 rounded text-white font-bold whitespace-nowrap shadow-sm text-xs">
+                        配置
+                    </button>
+                </div>
+            </div>
+
+            <!-- アクションボタン -->
+            <div class="flex gap-1.5 justify-end text-xs">
+                <button id="btn-reset-zoom" class="bg-gray-700 hover:bg-gray-600 transition-colors px-2.5 py-1 rounded flex items-center gap-1">
+                    ズーム初期化
+                </button>
+                <button id="btn-clear" class="bg-red-900 hover:bg-red-800 transition-colors px-2.5 py-1 rounded flex items-center gap-1 border border-red-700">
+                    全消去
+                </button>
+                <button id="btn-download" class="bg-indigo-600 hover:bg-indigo-500 transition-colors px-3 py-1 rounded flex items-center gap-1 font-bold shadow-md">
+                    📥 画像を保存
+                </button>
+            </div>
+        </div>
+        
+        <!-- 震度パレット -->
+        <div class="flex items-center gap-2 overflow-x-auto py-1 mt-1 border-t border-gray-700/30" id="shindo-selector">
+            <span class="text-xs font-semibold whitespace-nowrap text-gray-400">配置震度:</span>
+            <!-- JavaScriptで震度選択ボタンを動的配置 -->
+        </div>
+        
+        <div class="text-[10px] text-gray-400 flex flex-wrap justify-between gap-1 pb-1">
+            <span>💡 <strong>操作:</strong> 地形クリックで自動スナップ配置。ドラッグで地図移動・ホイールでズーム。</span>
+            <span class="text-yellow-400">※【震源地配置】モードにして地図上をクリックすると、震源✖マークを自由に移動・配置できます。</span>
+        </div>
+    </header>
+
+    <!-- マップ描画・シミュレーター本体エリア -->
+    <div id="map-container" class="flex-grow relative w-full overflow-hidden bg-[#264ed1]">
+        
+        <!-- ==================== NHK再現リアルタイムオーバーレイ ==================== -->
+        <!-- 上部中央: 発生時刻とマグニチュード & 最大震度プレート -->
+        <div class="absolute top-4 left-4 sm:left-6 z-20 pointer-events-none select-none flex items-stretch gap-0" id="nhk-header-panel">
+            <!-- 最大震度ボックス -->
+            <div id="max-shindo-plate" class="flex flex-col items-center justify-center border-t-2 border-l-2 border-r-2 border-white shadow-[2px_2px_10px_rgba(0,0,0,0.5)] px-4 py-1" style="min-width: 100px;">
+                <span class="text-[10px] font-bold tracking-widest leading-none mb-0.5">最大震度</span>
+                <span id="nhk-max-val" class="text-3xl font-extrabold leading-none font-sans" style="text-shadow: 1px 1px 0px rgba(255,255,255,0.4);">4</span>
+            </div>
+            <!-- 地震情報帯 -->
+            <div class="flex items-center bg-gradient-to-b from-[#5c7bb5] to-[#3a548c] border-t-2 border-r-2 border-b-2 border-white shadow-[2px_2px_10px_rgba(0,0,0,0.5)] px-6" style="border-left: 2px solid #fff;">
+                <div class="flex items-center gap-4 text-white text-lg font-bold">
+                    <span id="nhk-time-val" class="tracking-wide">1日 8時40分ごろ</span>
+                    <span id="nhk-mag-val" class="text-yellow-300 font-extrabold text-xl">M5.1</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 左側: 市区町村震度テロップ -->
+        <div class="absolute top-24 left-4 sm:left-6 z-20 pointer-events-none select-none flex flex-col items-stretch max-w-[200px]" id="nhk-town-panel">
+            <div class="bg-black/40 backdrop-blur-[2px] border-l-4 border-orange-500 p-2 shadow-[4px_4px_12px_rgba(0,0,0,0.6)] flex flex-col gap-1 rounded-r">
+                <div id="nhk-towns-list" class="text-sm font-bold text-white tracking-widest leading-relaxed outline-text whitespace-pre-line">
+                    延岡市
+                    日向市
+                    西都市
+                    川南町
+                    都農町
+                    門川町
+                    宮崎美郷町
+                </div>
+            </div>
+        </div>
+
+        <!-- 凡例 (画面右下) -->
+        <div class="absolute bottom-4 right-4 z-20 pointer-events-none bg-black/60 border border-white/20 p-2.5 rounded-lg text-[10px] shadow-lg max-w-[120px]" id="nhk-legend-container">
+            <div class="text-center font-bold text-white mb-1.5 pb-1 border-b border-white/20">震度凡例</div>
+            <div class="flex flex-col gap-1" id="legend-list-target">
+                <!-- JavaScriptで震度色リストを出力 -->
+            </div>
+        </div>
+
+        <!-- ローディング表示 -->
+        <div id="loading" class="absolute inset-0 flex flex-col items-center justify-center bg-[#264ed1] z-10 transition-opacity duration-300">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-4 border-white mb-4"></div>
+            <span id="loading-text" class="text-lg font-bold tracking-widest text-center leading-relaxed">
+                高解像度 地図データを<br>構築・読み込み中...
+            </span>
+        </div>
+    </div>
+
+    <script>
+        // --------------------------------------------------
+        // 設定とデータ定義
+        // --------------------------------------------------
+        
+        // 震央地名リスト
+        const epicenterRawList = `
+石狩地方北部（いしかりちほうほくぶ） [100]
+石狩地方中部（いしかりちhoうちゅうぶ） [101]
+石狩地方南部（いしかりちほうなんぶ） [102]
+渡島地方北部（おしまちほうほくぶ） [105]
+渡島地方東部（おしまちほうとうぶ） [106]
+渡島地方西部（おしまちほうせいぶ） [107]
+檜山地方（ひやまちほう） [110]
+後志地方北部（しりべしちほうほくぶ） [115]
+後志地方東部（しりべしちほうとうぶ） [116]
+後志地方西部（しりべしちほうせいぶ） [117]
+北海道奥尻島（ほっかいどうおくしりとう） [119]
+空知地方北部（そらちちほうほくぶ） [120]
+空知地方中部（そらちちhoうちゅうぶ） [121]
+空知地方南部（そらちちほうなんぶ） [122]
+上川地方北部（かみかわちほうほくぶ） [125]
+上川地方中部（かみかわちhoうちゅうぶ） [126]
+上川地方南部（かみかわちほうなんぶ） [127]
+留萌地方中北部（るもいちhoうちゅうほくぶ） [130]
+留萌地方南部（るもいちほうなんぶ） [131]
+宗谷地方北部（そうやちほうほくぶ） [135]
+宗谷地方南部（そうやちほうなんぶ） [136]
+北海道利尻礼文（ほっかいどうりしりれぶん） [139]
+網走地方（あばしりちほう） [140]
+北見地方（きたみちほう） [141]
+紋別地方（もんべつちほう） [142]
+胆振地方西部（いぶりちほうせいぶ） [145]
+胆振地方中東部（いぶりちhoうちゅうとうぶ） [146]
+日高地方西部（ひだかちほうせいぶ） [150]
+日高地方中部（ひだかちhoうちゅうぶ） [151]
+日高地方東部（ひだかちほうとうぶ） [152]
+十勝地方北部（とかちちほうほくぶ） [155]
+十勝地方中部（とかちちhoうちゅうぶ） [156]
+十勝地方南部（とかちちほうなんぶ） [157]
+釧路地方北部（くしろちほうほくぶ） [160]
+釧路地方中南部（くしろちhoうちゅうなんぶ） [161]
+根室地方北部（ねむろちほうほくぶ） [165]
+根室地方中部（ねむろちhoうちゅうぶ） [166]
+根室地方南部（ねむろちほうなんぶ） [167]
+青森県津軽北部（あおもりけんつがるほくぶ） [200]
+青森県津軽南部（あおもりけんつがるなんぶ） [201]
+青森県三八上北（あおもりけんさんぱちかみきた） [202]
+青森県下北（あおもりけんしもきた） [203]
+岩手県沿岸北部（いわてけんえんがんほくぶ） [210]
+岩手県沿岸南部（いわてけんえんがんなんぶ） [211]
+岩手県内陸北部（いわてけんないりくほくぶ） [212]
+岩手県内陸南部（いわてけんないりくなんぶ） [213]
+宮城県北部（みやぎけんほくぶ） [220]
+宮城県南部（みやぎkeんなんぶ） [221]
+宮城県中部（みやぎけんちゅうぶ） [222]
+秋田県沿岸北部（あきたけんえんがんほくぶ） [230]
+秋田県沿岸南部（あきたけんえんがんなんぶ） [231]
+秋田県内陸北部（あきたけんないりくほくぶ） [232]
+秋田県内陸南部（あきたけんないりくなんぶ） [233]
+山形県庄内（やまがたけんしょうない） [240]
+山形県最上（やまがたけんもがみ） [241]
+山形県村山（やまがたけんむらやま） [242]
+山形県置賜（やまがたけんおきたま） [243]
+福島県中通り（ふくしまkeんなかどおり） [250]
+福島県浜通り（ふくしまけんはまどおり） [251]
+福島県会津（ふくしまけんあいづ） [252]
+茨城県北部（いばらきけんほくぶ） [300]
+茨城県南部（いばらきけんなんぶ） [301]
+栃木県北部（とちぎけんほくぶ） [310]
+栃木県南部（とちぎけんなんぶ） [311]
+群馬県北部（ぐんまけんほくぶ） [320]
+群馬県南部（ぐんまkeんなんぶ） [321]
+埼玉県北部（さいたまけんほくぶ） [330]
+埼玉県南部（さいたまkeんなんぶ） [331]
+埼玉県秩父（さいたまけんちちぶ） [332]
+千葉県北東部（ちばけんほくとうぶ） [340]
+千葉県北西部（ちばけんほくせいぶ） [341]
+千葉県南部（ちばkeんなんぶ） [342]
+東京都２３区（とうきょうとにじゅうさんく） [350]
+東京都多摩東部（とうきょうとたまとうぶ） [351]
+東京都多摩西部（とうきょうとたませいぶ） [352]
+神津島（こうづしま） [354]
+伊豆大島（いずおおしま） [355]
+新島（にいじま） [356]
+三宅島（みやけじま） [357]
+八丈島（はちじょうじま） [358]
+小笠原（おがさわら） [359]
+神奈川県東部（かながわけんとうぶ） [360]
+神奈川県西部（かながわけんせいぶ） [361]
+新潟県上越（にいがたけんじょうえつ） [370]
+新潟県中越（にいがたけんちゅうえつ） [371]
+新潟県下越（にいがたけんかえつ） [372]
+新潟県佐渡（にいがたけんさど） [375]
+富山県東部（とやまけんとうぶ） [380]
+富山県西部（とやまけんせいぶ） [381]
+石川県能登（いしかわけんのと） [390]
+石川県加賀（いしかわけんかが） [391]
+福井県嶺北（ふくいけんれいほく） [400]
+福井県嶺南（ふくいけんれいなん） [401]
+山梨県中・西部（やまなしけんちゅうせいぶ） [411]
+山梨県東部・富士五湖（やまなしけんとうぶふじごこ） [412]
+長野県北部（ながのけんほくぶ） [420]
+長野県中部（ながのけんちゅうぶ） [421]
+長野県南部（ながのkeんなんぶ） [422]
+岐阜県飛騨（ぎふけんひだ） [430]
+岐阜県美濃東部（ぎふけんみのとうぶ） [431]
+岐阜県美濃中西部（ぎふけんみのちゅうせいぶ） [432]
+静岡県伊豆（しずおかけんいず） [440]
+静岡県東部（しずおかけんとうぶ） [441]
+静岡県中部（しずおかけんちゅうぶ） [442]
+静岡県西部（しずおかけんせいぶ） [443]
+愛知県東部（あいちけんとうぶ） [450]
+愛知県西部（aいちけんせいぶ） [451]
+三重県北部（みえけんほくぶ） [460]
+三重県中部（みえけんちゅうぶ） [461]
+三重県南部（みえkeんなんぶ） [462]
+滋賀県北部（しがけんほくぶ） [500]
+滋賀県南部（しがkeんなんぶ） [501]
+京都府北部（きょうtoふほくぶ） [510]
+京都府南部（きょうとふなんぶ） [511]
+大阪府北部（おおさかふほくぶ） [520]
+大阪府南部（おおさかふなんぶ） [521]
+兵庫県北部（ひょうごけんほくぶ） [530]
+兵庫県南東部（ひょうごけんなんとうぶ） [531]
+兵庫県南西部（ひょうごkeんなんせいぶ） [532]
+兵庫県淡路島（ひょうごけんあわじしま） [535]
+奈良県（ならけん） [540]
+和歌山県北部（わかやまけんほくぶ） [550]
+和歌山県南部（わかやまkeんなんぶ） [551]
+鳥取県東部（とっとりけんとうぶ） [560]
+鳥取県中部（とっとりけんちゅうぶ） [562]
+鳥取県西部（とっとりけんせいぶ） [563]
+島根県東部（しまねけんとうぶ） [570]
+島根県西部（しまねけんせいぶ） [571]
+島根県隠岐（しまねけんおき） [575]
+岡山県北部（おかやまけんほくぶ） [580]
+岡山県南部（おかやまkeんなんぶ） [581]
+広島県北部（ひろしまけんほくぶ） [590]
+広島県南東部（ひろしまけんなんとうぶ） [591]
+広島県南西部（ひろしまkeんなんせいぶ） [592]
+徳島県北部（とくしまけんほくぶ） [600]
+徳島県南部（とくしまkeんなんぶ） [601]
+香川県東部（かがわけんとうぶ） [610]
+香川県西部（かがわけんせいぶ） [611]
+愛媛県東予（えひめけんとうよ） [620]
+愛媛県中予（えひめけんちゅうよ） [621]
+愛媛県南予（えひめkeんなんよ） [622]
+高知県東部（こうちけんとうぶ） [630]
+高知県中部（こうちけんちゅうぶ） [631]
+高知県西部（こうちけんせいぶ） [632]
+山口県北部（やまぐちけんほくぶ） [700]
+山口県西部（やまぐちけんせいぶ） [702]
+山口県東部（やまぐちけんとうぶ） [703]
+山口県中部（やまぐちけんちゅうぶ） [704]
+福岡県福岡（ふくおかけんふくおか） [710]
+福岡県北九州（ふくおかけんきたきゅうしゅう） [711]
+福岡県筑豊（ふくおかけんちくほう） [712]
+福岡県筑後（ふくおかけんちくご） [713]
+佐賀県北部（さがけんほくぶ） [720]
+佐賀県南部（さがkeんなんぶ） [721]
+長崎県北部（ながさきけんほくぶ） [730]
+長崎県南西部（ながさきkeんなんせいぶ） [731]
+長崎県島原半島（ながさきけんしまばらはんとう） [732]
+長崎県対馬（ながさきけんつしま） [735]
+長崎県壱岐（ながさきけんいき） [736]
+長崎県五島（ながさきけんごとう） [737]
+熊本県阿蘇（くまもとけんあそ） [740]
+熊本県熊本（くまもとけんくまもと） [741]
+熊本県球磨（くまもとけんくま） [742]
+熊本県天草・芦北（くまもとけんあまくさあしきた） [743]
+大分県北部（おおいたけんほくぶ） [750]
+大分県中部（おおいたけんちゅうぶ） [751]
+大分県南部（おおいたkeんなんぶ） [752]
+大分県西部（おおいたけんせいぶ） [753]
+宮崎県北部平野部（みやざきけんほくぶへいやぶ） [760]
+宮崎県北部山沿い（みやざきけんほくぶやまぞい） [761]
+宮崎県南部平野部（みやざきkeんなんぶへいやぶ） [762]
+宮崎県南部山沿い（みやざきkeんなんぶやまぞい） [763]
+鹿児島県薩摩（かごしまけんさつま） [770]
+鹿児島県大隅（かごしまけんおおすみ） [771]
+鹿児島県十島村（かごしまけんとしまむら） [774]
+鹿児島県甑島（かごしまけんこしきしま） [775]
+鹿児島県種子島（かごしまけんたねがしま） [776]
+鹿児島県屋久島（かごしまけんやくしま） [777]
+鹿児島県奄美北部（かごしまけんあまみほくぶ） [778]
+鹿児島県奄美南部（かごしまけんあまみなんぶ） [779]
+沖縄県本島北部（おきなわけんほんとうほくぶ） [800]
+沖縄県本島中南部（おきなわけんほんとうちゅうなんぶ） [801]
+沖縄県久米島（おきなわけんくめじま） [802]
+沖縄県大東島（おきなわけんだいとうじま） [803]
+沖縄県宮古島（おきなわけんみやこじま） [804]
+沖縄県石垣島（おきなわけんいしがきじま） [805]
+沖縄県与那国島（おきなわけんよなぐにじま） [806]
+沖縄県西表島（おきなわけんいりおもてじま） [807]
+`;
+
+        const fallbackCoordinates = {
+            "354": { lon: 139.13, lat: 34.22 }, // 神津島
+            "355": { lon: 139.40, lat: 34.75 }, // 伊豆大島
+            "356": { lon: 139.26, lat: 34.40 }, // 新島
+            "357": { lon: 140.09, lat: 34.08 }, // 三宅島
+            "358": { lon: 139.79, lat: 33.11 }, // 八丈島
+            "359": { lon: 142.20, lat: 27.09 }, // 小笠原
+            "774": { lon: 129.92, lat: 29.84 }, // 鹿児島県十島村
+            "775": { lon: 129.71, lat: 31.74 }, // 甑島
+            "776": { lon: 130.98, lat: 30.57 }, // 種子島
+            "777": { lon: 130.51, lat: 30.34 }, // 屋久島
+            "778": { lon: 129.49, lat: 28.37 }, // 奄美北部
+            "779": { lon: 129.28, lat: 27.89 }, // 奄美南部
+            "800": { lon: 127.96, lat: 26.65 }, // 沖縄県本島北部
+            "801": { lon: 127.76, lat: 26.24 }, // 沖縄県本島中南部
+            "802": { lon: 126.77, lat: 26.35 }, // 沖縄県久米島
+            "803": { lon: 131.23, lat: 25.84 }, // 沖縄県大東島
+            "804": { lon: 125.28, lat: 24.78 }, // 沖縄県宮古島
+            "805": { lon: 124.16, lat: 24.34 }, // 沖縄県石垣島
+            "806": { lon: 123.01, lat: 24.47 }, // 沖縄県与那国島
+            "807": { lon: 123.81, lat: 24.33 }, // 沖縄県西表島
+        };
+
+        const epicenterData = {};
+        epicenterRawList.trim().split('\n').forEach(line => {
+            const match = line.match(/(.+?)（(.+?)）\s*\[(\d+)\]/);
+            if (match) {
+                const code = match[3];
+                epicenterData[code] = { 
+                    name: match[1], 
+                    kana: match[2], 
+                    code: code, 
+                    lon: fallbackCoordinates[code] ? fallbackCoordinates[code].lon : null, 
+                    lat: fallbackCoordinates[code] ? fallbackCoordinates[code].lat : null, 
+                    feature: null 
+                };
+            }
+        });
+
+        // P2PQuake APIのScale値を変換
+        function convertP2PScale(scale) {
+            const map = {
+                10: '1', 20: '2', 30: '3', 40: '4',
+                45: '5弱', 46: '5強', 50: '6弱', 55: '6強', 60: '7'
+            };
+            return map[scale] || '';
+        }
+
+        // 送付された色見本ファイルを完璧に再現した色定義一覧
+        const shindoLevels = [
+            { id: '7', label: '7', bg: '#C80000', fg: '#FFFFFF', weight: 9 },
+            { id: '6強', label: '6強', bg: '#FFCDE6', fg: '#C80000', weight: 8 },
+            { id: '6弱', label: '6弱', bg: '#FFCDE6', fg: '#C80000', weight: 7 },
+            { id: '5強', label: '5強', bg: '#C80000', fg: '#FFFFFF', weight: 6 },
+            { id: '5弱', label: '5弱', bg: '#C80000', fg: '#FFFFFF', weight: 5 },
+            { id: '4', label: '4', bg: '#FA7800', fg: '#000000', weight: 4 },
+            { id: '3', label: '3', bg: '#F0DC73', fg: '#000000', weight: 3 },
+            { id: '2', label: '2', bg: '#8CC85A', fg: '#000000', weight: 2 },
+            { id: '1', label: '1', bg: '#00B4FA', fg: '#000000', weight: 1 } 
+        ];
+
+        let activeMode = 'shindo'; 
+        let currentSelectedLevel = '4'; 
+        let icons = []; 
+        let currentTransform = d3.zoomIdentity; 
+        
+        let epicenterLocation = { lon: 131.65, lat: 32.15, visible: true }; 
+
+        // --------------------------------------------------
+        // UIイベントおよび制御
+        // --------------------------------------------------
+        const selector = document.getElementById('shindo-selector');
+        
+        document.getElementById('mode-shindo').addEventListener('click', () => {
+            activeMode = 'shindo';
+            document.getElementById('mode-shindo').className = 'bg-blue-600 px-2.5 py-1 rounded font-bold transition-all';
+            document.getElementById('mode-epicenter').className = 'hover:bg-gray-600 px-2.5 py-1 rounded transition-all text-gray-300';
+        });
+
+        document.getElementById('mode-epicenter').addEventListener('click', () => {
+            activeMode = 'epicenter';
+            document.getElementById('mode-shindo').className = 'hover:bg-gray-600 px-2.5 py-1 rounded transition-all text-gray-300';
+            document.getElementById('mode-epicenter').className = 'bg-blue-600 px-2.5 py-1 rounded font-bold transition-all';
+        });
+
+        function updateSelectorUI() {
+            Array.from(selector.querySelectorAll('button')).forEach(btn => {
+                if (btn.dataset.id === currentSelectedLevel) {
+                    btn.className = 'flex-shrink-0 w-11 h-11 rounded border-2 border-white ring-2 ring-blue-400 font-bold text-sm shadow-md transition-transform scale-110 z-10 cursor-pointer';
+                } else {
+                    btn.className = 'flex-shrink-0 w-11 h-11 rounded border border-gray-600 font-bold text-sm shadow-sm transition-transform hover:scale-105 opacity-80 hover:opacity-100 cursor-pointer';
+                }
+            });
+        }
+
+        shindoLevels.forEach(level => {
+            const btn = document.createElement('button');
+            btn.dataset.id = level.id;
+            btn.style.backgroundColor = level.bg;
+            btn.style.color = level.fg;
+            btn.innerText = level.label;
+            if (level.id === '7') {
+                btn.style.border = '2px solid #FFFF00';
+            }
+            if(level.label.length > 1) {
+                btn.style.fontSize = '0.7rem';
+                btn.style.lineHeight = '1';
+                btn.style.letterSpacing = '-1px';
+            }
+            btn.onclick = () => {
+                currentSelectedLevel = level.id;
+                updateSelectorUI();
+            };
+            selector.appendChild(btn);
+        });
+        updateSelectorUI();
+
+        const legendTarget = document.getElementById('legend-list-target');
+        shindoLevels.forEach(level => {
+            const row = document.createElement('div');
+            row.className = 'flex items-center gap-1.5';
+            const borderStyle = level.id === '7' ? 'border: 1.5px solid #FFFF00;' : 'border: 1px solid rgba(0,0,0,0.4);';
+            row.innerHTML = `
+                <span class="w-7 h-4 rounded text-center font-black leading-none text-[9px] flex items-center justify-center" style="background-color: ${level.bg}; color: ${level.fg}; ${borderStyle}">${level.label}</span>
+                <span class="text-[9px] text-gray-300">震度 ${level.id}</span>
+            `;
+            legendTarget.appendChild(row);
+        });
+
+        const regionSelect = document.getElementById('region-select');
+        Object.values(epicenterData).forEach(ep => {
+            const option = document.createElement('option');
+            option.value = ep.code;
+            option.textContent = `${ep.name} [${ep.code}]`;
+            regionSelect.appendChild(option);
+        });
+
+        const inputTime = document.getElementById('input-time');
+        const inputMag = document.getElementById('input-mag');
+        const inputTowns = document.getElementById('input-towns');
+        const selectMaxShindo = document.getElementById('select-max-shindo');
+        const nhkTimeVal = document.getElementById('nhk-time-val');
+        const nhkMagVal = document.getElementById('nhk-mag-val');
+        const nhkTownsList = document.getElementById('nhk-towns-list');
+        const nhkMaxVal = document.getElementById('nhk-max-val');
+
+        function syncNhkPanels() {
+            nhkTimeVal.textContent = inputTime.value;
+            nhkMagVal.textContent = `M${inputMag.value}`;
+            nhkTownsList.textContent = inputTowns.value;
+            nhkMaxVal.textContent = selectMaxShindo.value;
+            
+            const maxLevelObj = shindoLevels.find(l => l.id === selectMaxShindo.value);
+            const parentMaxBox = document.getElementById('max-shindo-plate');
+            if (maxLevelObj && parentMaxBox) {
+                parentMaxBox.style.background = `linear-gradient(to bottom, ${maxLevelObj.bg}, ${maxLevelObj.bg}dd)`;
+                nhkMaxVal.style.color = maxLevelObj.fg;
+                parentMaxBox.querySelector('span').style.color = maxLevelObj.fg;
+
+                if (selectMaxShindo.value === '7') {
+                    parentMaxBox.style.borderColor = '#FFFF00';
+                    parentMaxBox.style.borderWidth = '3px';
+                } else {
+                    parentMaxBox.style.borderColor = '#FFFFFF';
+                    parentMaxBox.style.borderWidth = '2px';
+                }
+            }
+        }
+
+        inputTime.addEventListener('input', syncNhkPanels);
+        inputMag.addEventListener('input', syncNhkPanels);
+        inputTowns.addEventListener('input', syncNhkPanels);
+        selectMaxShindo.addEventListener('change', syncNhkPanels);
+        syncNhkPanels();
+
+        // --------------------------------------------------
+        // P2PQuake API 完全連携: 地震一覧の取得と統合処理
+        // --------------------------------------------------
+        let groupedEarthquakes = []; // P2P電文を自動マージしたリスト
+
+        // 県名から代表的な細分区域コードへのフォールバックマッピング
+        const prefToRegionCode = {
+            "北海道": "101", "青森県": "200", "岩手県": "212", "宮城県": "222",
+            "秋田県": "232", "山形県": "242", "福島県": "250", "茨城県": "301",
+            "栃木県": "311", "群馬県": "321", "埼玉県": "331", "千葉県": "341",
+            "東京都": "350", "神奈川県": "360", "新潟県": "371", "富山県": "380",
+            "石川県": "391", "福井県": "400", "山梨県": "411", "長野県": "421",
+            "岐阜県": "431", "静岡県": "442", "愛知県": "451", "三重県": "461",
+            "滋賀県": "501", "京都府": "511", "大阪府": "520", "兵庫県": "531",
+            "奈良県": "540", "和歌山県": "550", "鳥取県": "560", "島根県": "570",
+            "岡山県": "581", "広島県": "591", "徳島県": "600", "香川県": "610",
+            "愛媛県": "621", "高知県": "631", "山口県": "704", "福岡県": "710",
+            "佐賀県": "721", "長崎県": "731", "熊本県": "741", "大分県": "751",
+            "宮崎県": "762", "鹿児島県": "770", "沖縄県": "801"
+        };
+
+        function fetchP2PHistory() {
+            fetch("https://api.p2pquake.net/v2/history?codes=551&limit=100")
+                .then(res => res.json())
+                .then(data => {
+                    const select = document.getElementById('p2p-history-select');
+                    select.innerHTML = '<option value="">(P2PQuakeから過去の地震を選択)</option>';
+                    
+                    const groups = {};
+                    
+                    data.forEach(item => {
+                        const eqTime = item.earthquake.time;
+                        if (!groups[eqTime]) {
+                            groups[eqTime] = {
+                                time: eqTime,
+                                hypocenter: item.earthquake.hypocenter,
+                                maxScale: item.earthquake.maxScale || -1,
+                                areaPoints: [], 
+                                cityPoints: []  
+                            };
+                        }
+                        
+                        // 最大震度更新
+                        if (item.earthquake.maxScale > groups[eqTime].maxScale) {
+                            groups[eqTime].maxScale = item.earthquake.maxScale;
+                        }
+                        
+                        // 震源地情報の補完
+                        if (item.earthquake.hypocenter && item.earthquake.hypocenter.name) {
+                            if (!groups[eqTime].hypocenter.name) {
+                                groups[eqTime].hypocenter = item.earthquake.hypocenter;
+                            }
+                        }
+
+                        // 観測点(Points)の分類とマージ
+                        if (item.points) {
+                            item.points.forEach(p => {
+                                if (p.isArea) {
+                                    const existing = groups[eqTime].areaPoints.find(ap => ap.addr === p.addr);
+                                    if (existing) {
+                                        if (p.scale > existing.scale) existing.scale = p.scale;
+                                    } else {
+                                        groups[eqTime].areaPoints.push(p);
+                                    }
+                                } else {
+                                    const existing = groups[eqTime].cityPoints.find(cp => cp.addr === p.addr);
+                                    if (existing) {
+                                        if (p.scale > existing.scale) existing.scale = p.scale;
+                                    } else {
+                                        groups[eqTime].cityPoints.push(p);
+                                    }
+                                }
+                            });
+                        }
+                    });
+
+                    // 時間順にソート
+                    groupedEarthquakes = Object.values(groups).sort((a, b) => new Date(b.time) - new Date(a.time));
+
+                    groupedEarthquakes.forEach((g, idx) => {
+                        const dt = new Date(g.time);
+                        const timeStr = `${dt.getMonth()+1}月${dt.getDate()}日 ${dt.getHours()}:${dt.getMinutes().toString().padStart(2,'0')}`;
+                        const mag = g.hypocenter.magnitude !== -1 ? g.hypocenter.magnitude : '-';
+                        const maxi = g.maxScale !== -1 ? convertP2PScale(g.maxScale) : '不明';
+                        const enName = g.hypocenter.name || '海外・遠地地震';
+
+                        const option = document.createElement('option');
+                        option.value = idx; 
+                        option.textContent = `【最大${maxi}】 ${timeStr} 震源:${enName} (M${mag})`;
+                        select.appendChild(option);
+                    });
+                })
+                .catch(err => {
+                    console.error("P2Pリスト取得エラー", err);
+                    document.getElementById('p2p-history-select').innerHTML = '<option value="">(取得失敗)</option>';
+                });
+        }
+
+        // P2PQuakeデータからの完全自動配置
+        document.getElementById('btn-load-p2p').addEventListener('click', () => {
+            const idx = document.getElementById('p2p-history-select').value;
+            if (idx === "") return;
+
+            const eqGroup = groupedEarthquakes[idx];
+            
+            icons = [];
+            epicenterLocation.visible = false;
+            
+            // ヘッダー情報自動入力
+            if (eqGroup.time) {
+                const dt = new Date(eqGroup.time);
+                document.getElementById('input-time').value = `${dt.getDate()}日 ${dt.getHours()}時${dt.getMinutes().toString().padStart(2, '0')}分ごろ`;
+            }
+            if (eqGroup.hypocenter && eqGroup.hypocenter.magnitude !== -1) {
+                document.getElementById('input-mag').value = eqGroup.hypocenter.magnitude.toString();
+            } else {
+                document.getElementById('input-mag').value = "-";
+            }
+            
+            if (eqGroup.maxScale !== -1) {
+                document.getElementById('select-max-shindo').value = convertP2PScale(eqGroup.maxScale);
+                
+                // テロップ用市町村リストの抽出
+                let maxTowns = [];
+                if (eqGroup.cityPoints.length > 0) {
+                    maxTowns = eqGroup.cityPoints.filter(p => p.scale === eqGroup.maxScale).map(p => p.addr);
+                } else if (eqGroup.areaPoints.length > 0) {
+                    maxTowns = eqGroup.areaPoints.filter(p => p.scale === eqGroup.maxScale).map(p => p.addr);
+                }
+                
+                if (maxTowns.length > 0) {
+                    document.getElementById('input-towns').value = maxTowns.slice(0, 10).join('\n');
+                } else {
+                    document.getElementById('input-towns').value = eqGroup.hypocenter.name || "海外震源地";
+                }
+            } else {
+                document.getElementById('select-max-shindo').value = "1";
+                document.getElementById('input-towns').value = eqGroup.hypocenter.name || "データなし";
+            }
+
+            // 震源地座標の配置
+            if (eqGroup.hypocenter && eqGroup.hypocenter.latitude !== -200 && eqGroup.hypocenter.longitude !== -200) {
+                epicenterLocation.lat = eqGroup.hypocenter.latitude;
+                epicenterLocation.lon = eqGroup.hypocenter.longitude;
+                epicenterLocation.visible = true;
+            }
+
+            // 震度ドットのマッピング
+            const prefMax = {}; 
+            
+            // isArea:true (細分区域名) での完全一致マッピングを試みる
+            eqGroup.areaPoints.forEach(p => {
+                const matched = Object.values(epicenterData).find(e => e.name === p.addr || e.name === p.addr + "地方");
+                if (matched && matched.lon) {
+                    icons.push({
+                        id: Date.now() + Math.random(),
+                        code: matched.code,
+                        lon: matched.lon,
+                        lat: matched.lat,
+                        level: convertP2PScale(p.scale),
+                        name: matched.name
+                    });
+                }
+            });
+
+            // 市町村ポイントは県ごとの最大震度集計用に回す
+            eqGroup.cityPoints.forEach(p => {
+                if (!prefMax[p.pref] || prefMax[p.pref] < p.scale) {
+                    prefMax[p.pref] = p.scale;
+                }
+            });
+
+            // もし areaPoints が無い（古い詳細データなど）場合、県ごとの代表点にフォールバックして描画
+            if (icons.length === 0) {
+                for (const pref in prefMax) {
+                    const code = prefToRegionCode[pref];
+                    if (code && epicenterData[code] && epicenterData[code].lon) {
+                        icons.push({
+                            id: Date.now() + Math.random(),
+                            code: code,
+                            lon: epicenterData[code].lon,
+                            lat: epicenterData[code].lat,
+                            level: convertP2PScale(prefMax[pref]),
+                            name: pref
+                        });
+                    }
+                }
+            }
+
+            syncNhkPanels();
+            renderIcons();
+            drawEpicenter();
+            autoFitAllVisiblePoints();
+        });
+
+        // --------------------------------------------------
+        // 地図のセットアップ (D3.js)
+        // --------------------------------------------------
+        const container = document.getElementById('map-container');
+        let width = container.clientWidth;
+        let height = container.clientHeight;
+
+        const svg = d3.select('#map-container').append('svg')
+            .attr('id', 'map-svg')
+            .attr('width', width)
+            .attr('height', height)
+            .style('background-color', '#264ed1')
+            .style('display', 'block');
+
+        const foreignLayer = svg.append('g').attr('id', 'foreign-layer').attr('shape-rendering', 'optimizeSpeed');
+        const mapLayer = svg.append('g').attr('id', 'map-layer').attr('shape-rendering', 'optimizeSpeed');
+        const areaBorderLayer = svg.append('g').attr('id', 'area-border-layer').attr('shape-rendering', 'optimizeSpeed');
+        const prefBorderLayer = svg.append('g').attr('id', 'pref-border-layer').attr('shape-rendering', 'optimizeSpeed');
+        const epicenterLayer = svg.append('g').attr('id', 'epicenter-layer');
+        const iconLayer = svg.append('g').attr('id', 'icon-layer');
+
+        const projection = d3.geoMercator()
+            .center([131.6, 32.2])
+            .scale(4200)
+            .translate([width / 2.3, height / 1.7]);
+
+        const path = d3.geoPath().projection(projection);
+
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 100])
+            .on('zoom', (event) => {
+                currentTransform = event.transform;
+                const k = event.transform.k;
+                foreignLayer.attr('transform', event.transform);
+                mapLayer.attr('transform', event.transform);
+                prefBorderLayer.attr('transform', event.transform);
+                areaBorderLayer.attr('transform', event.transform);
+                
+                prefBorderLayer.selectAll('path').attr('stroke-width', 1.5 / k);
+                areaBorderLayer.selectAll('path')
+                    .attr('stroke-width', 0.6 / k)
+                    .attr('stroke-dasharray', `${2/k}, ${2/k}`);
+
+                updateEpicenterPosition();
+                updateIconPositions();
+            });
+
+        svg.call(zoom);
+
+        // 地図データの読み込み
+        const topoJsonUrl = 'https://raw.githubusercontent.com/dataofjapan/land/master/japan.topojson';
+        const jmaEqGeoJsonUrl = 'https://www.jma.go.jp/bosai/common/const/geojson/earthquake.json';
+        const worldTopoUrl = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json';
+
+        Promise.all([
+            d3.json(topoJsonUrl),
+            d3.json(jmaEqGeoJsonUrl).catch(() => null),
+            d3.json(worldTopoUrl).catch(() => null)
+        ]).then(([topoData, eqGeoJson, worldData]) => {
+            document.getElementById('loading').style.opacity = '0';
+            setTimeout(() => { document.getElementById('loading').style.display = 'none'; }, 300);
+
+            if (worldData) {
+                const countries = topojson.feature(worldData, worldData.objects.countries);
+                const foreignCountries = countries.features.filter(d => d.id !== "392" && d.id !== 392);
+                
+                foreignLayer.selectAll('path')
+                    .data(foreignCountries)
+                    .enter()
+                    .append('path')
+                    .attr('d', path)
+                    .attr('fill', '#a68d79')
+                    .attr('opacity', 0.95);
+            }
+
+            const geojson = topojson.feature(topoData, topoData.objects.japan);
+            mapLayer.selectAll('path')
+                .data(geojson.features)
+                .enter()
+                .append('path')
+                .attr('d', path)
+                .attr('fill', '#a68d79');
+
+            if (eqGeoJson && eqGeoJson.features) {
+                areaBorderLayer.selectAll('path')
+                    .data(eqGeoJson.features)
+                    .enter()
+                    .append('path')
+                    .attr('d', path)
+                    .attr('fill', 'none')
+                    .attr('stroke', '#715a40')
+                    .attr('stroke-width', 0.6)
+                    .attr('stroke-dasharray', '2, 2');
+
+                prefBorderLayer.selectAll('path')
+                    .data(geojson.features)
+                    .enter()
+                    .append('path')
+                    .attr('d', path)
+                    .attr('fill', 'none')
+                    .attr('stroke', '#4a3319')
+                    .attr('stroke-width', 1.5);
+
+                eqGeoJson.features.forEach(feature => {
+                    const props = feature.properties;
+                    let code = props.code || props.id || props.regioncode;
+                    
+                    if (!code) {
+                        const matched = Object.values(epicenterData).find(e => e.name === props.name);
+                        if (matched) code = matched.code;
+                    }
+
+                    if (code && epicenterData[code]) {
+                        epicenterData[code].feature = feature;
+                        if (epicenterData[code].lon === null) {
+                            const centroid = d3.geoCentroid(feature);
+                            epicenterData[code].lon = centroid[0];
+                            epicenterData[code].lat = centroid[1];
+                        }
+                    }
+                });
+            }
+
+            const initialDemo = [
+                { code: '762', level: '4' },
+                { code: '763', level: '3' },
+                { code: '760', level: '3' },
+                { code: '771', level: '2' }
+            ];
+
+            initialDemo.forEach(item => {
+                const ep = epicenterData[item.code];
+                if (ep && ep.lon) {
+                    icons.push({
+                        id: Date.now() + Math.random(),
+                        code: item.code,
+                        lon: ep.lon,
+                        lat: ep.lat,
+                        level: item.level,
+                        name: ep.name
+                    });
+                }
+            });
+
+            renderIcons();
+            drawEpicenter();
+            autoFitAllVisiblePoints();
+        });
+
+        // 過去地震リストの取得開始 (P2P API利用)
+        fetchP2PHistory();
+
+        // --------------------------------------------------
+        // カメラ自動調整機能
+        // --------------------------------------------------
+        function autoFitAllVisiblePoints() {
+            const coordinates = [];
+            
+            icons.forEach(icon => {
+                if (icon.lon && icon.lat) {
+                    coordinates.push([icon.lon, icon.lat]);
+                }
+            });
+
+            if (epicenterLocation.visible && epicenterLocation.lon && epicenterLocation.lat) {
+                coordinates.push([epicenterLocation.lon, epicenterLocation.lat]);
+            }
+
+            if (coordinates.length === 0) return;
+
+            let minLon = Infinity, maxLon = -Infinity;
+            let minLat = Infinity, maxLat = -Infinity;
+
+            coordinates.forEach(([lon, lat]) => {
+                if (lon < minLon) minLon = lon;
+                if (lon > maxLon) maxLon = lon;
+                if (lat < minLat) minLat = lat;
+                if (lat > maxLat) maxLat = lat;
+            });
+
+            const centerLon = (minLon + maxLon) / 2;
+            const centerLat = (minLat + maxLat) / 2;
+
+            const pMin = projection([minLon, maxLat]);
+            const pMax = projection([maxLon, minLat]);
+
+            if (!pMin || !pMax) return;
+
+            const dx = Math.abs(pMax[0] - pMin[0]);
+            const dy = Math.abs(pMax[1] - pMin[1]);
+
+            const padding = 120;
+            const wLimit = width - padding * 2;
+            const hLimit = height - padding * 2;
+
+            let autoScale = 1;
+            if (dx > 0 || dy > 0) {
+                autoScale = Math.min(wLimit / dx, hLimit / dy);
+            }
+            
+            autoScale = Math.max(0.1, Math.min(autoScale, 20));
+
+            const centerProjected = projection([centerLon, centerLat]);
+            if (!centerProjected) return;
+
+            const tx = width / 2 - autoScale * centerProjected[0];
+            const ty = height / 2 - autoScale * centerProjected[1];
+
+            const instantTransform = d3.zoomIdentity.translate(tx, ty).scale(autoScale);
+            currentTransform = instantTransform;
+            svg.call(zoom.transform, instantTransform);
+        }
+
+        // --------------------------------------------------
+        // インタラクションと描画ロジック
+        // --------------------------------------------------
+        svg.on('click', (event) => {
+            if (event.defaultPrevented) return;
+
+            const [x, y] = d3.pointer(event);
+            const invertedPoint = currentTransform.invert([x, y]);
+            const [lon, lat] = projection.invert(invertedPoint);
+
+            if (activeMode === 'epicenter') {
+                epicenterLocation.lon = lon;
+                epicenterLocation.lat = lat;
+                epicenterLocation.visible = true;
+                drawEpicenter();
+                autoFitAllVisiblePoints();
+            } else {
+                let targetCode = null;
+                let minDistance = Infinity;
+
+                for (const code in epicenterData) {
+                    const ep = epicenterData[code];
+                    if (!ep.lon || !ep.lat) continue;
+
+                    if (ep.feature && d3.geoContains(ep.feature, [lon, lat])) {
+                        targetCode = code;
+                        break;
+                    }
+
+                    const dist = d3.geoDistance([lon, lat], [ep.lon, ep.lat]);
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        targetCode = code;
+                    }
+                }
+
+                if (targetCode && epicenterData[targetCode].lon) {
+                    const ep = epicenterData[targetCode];
+                    icons = icons.filter(icon => icon.code !== targetCode);
+                    
+                    icons.push({
+                        id: Date.now(),
+                        code: targetCode,
+                        lon: ep.lon,
+                        lat: ep.lat,
+                        level: currentSelectedLevel,
+                        name: ep.name
+                    });
+
+                    regionSelect.value = targetCode;
+                } else {
+                    icons.push({
+                        id: Date.now(),
+                        code: null,
+                        lon: lon,
+                        lat: lat,
+                        level: currentSelectedLevel,
+                        name: "不明地域"
+                    });
+                }
+                renderIcons();
+                autoFitAllVisiblePoints();
+            }
+        });
+
+        document.getElementById('btn-add-region').addEventListener('click', () => {
+            const code = regionSelect.value;
+            if (!code) return;
+
+            const ep = epicenterData[code];
+            if (ep && ep.lon && ep.lat) {
+                icons = icons.filter(icon => icon.code !== code);
+                icons.push({
+                    id: Date.now(),
+                    code: code,
+                    lon: ep.lon,
+                    lat: ep.lat,
+                    level: currentSelectedLevel,
+                    name: ep.name
+                });
+                renderIcons();
+                autoFitAllVisiblePoints();
+            }
+        });
+
+        function renderIcons() {
+            icons.sort((a, b) => {
+                const wA = shindoLevels.find(l => l.id === a.level)?.weight || 0;
+                const wB = shindoLevels.find(l => l.id === b.level)?.weight || 0;
+                return wA - wB; 
+            });
+
+            const iconGroups = iconLayer.selectAll('g.shindo-icon')
+                .data(icons, d => d.id);
+
+            const enter = iconGroups.enter()
+                .append('g')
+                .attr('class', 'shindo-icon')
+                .style('cursor', 'pointer')
+                .on('click', (event, d) => {
+                    event.stopPropagation();
+                    icons = icons.filter(icon => icon.id !== d.id);
+                    renderIcons();
+                    autoFitAllVisiblePoints();
+                });
+
+            enter.append('title')
+                .text(d => d.name ? `${d.name} (震度 ${d.level})` : `震度 ${d.level}`);
+
+            enter.append('rect')
+                .attr('x', -14)
+                .attr('y', -14)
+                .attr('width', 28)
+                .attr('height', 28)
+                .attr('stroke', d => d.level === '7' ? '#FFFF00' : 'none')
+                .attr('stroke-width', d => d.level === '7' ? 2 : 0)
+                .attr('fill', d => {
+                    const level = shindoLevels.find(l => l.id === d.level);
+                    return level ? level.bg : '#FFF';
+                });
+
+            enter.append('text')
+                .attr('text-anchor', 'middle')
+                .attr('dominant-baseline', 'central')
+                .attr('font-family', '"Helvetica Neue", Arial, sans-serif')
+                .attr('font-weight', '900')
+                .attr('stroke', 'none')
+                .attr('fill', d => {
+                    const level = shindoLevels.find(l => l.id === d.level);
+                    return level ? level.fg : '#000';
+                })
+                .attr('font-size', d => {
+                    return d.level.length > 1 ? '10px' : '18px';
+                })
+                .attr('letter-spacing', d => {
+                    return d.level.length > 1 ? '-1px' : '0px';
+                })
+                .attr('dy', '0.05em')
+                .text(d => {
+                    const level = shindoLevels.find(l => l.id === d.level);
+                    return level ? level.label : '';
+                });
+
+            iconGroups.exit().remove();
+            
+            iconLayer.selectAll('g.shindo-icon').order();
+            updateIconPositions();
+        }
+
+        function updateIconPositions() {
+            iconLayer.selectAll('g.shindo-icon')
+                .attr('transform', d => {
+                    const projected = projection([d.lon, d.lat]);
+                    if (!projected) return `translate(-2000, -2000)`;
+                    const [x, y] = projected;
+                    const tx = currentTransform.applyX(x);
+                    const ty = currentTransform.applyY(y);
+                    return `translate(${tx}, ${ty})`;
+                });
+        }
+
+        function drawEpicenter() {
+            epicenterLayer.selectAll('*').remove();
+            if (!epicenterLocation.visible) return;
+
+            const dragHandler = d3.drag()
+                .on('drag', (event) => {
+                    const [x, y] = d3.pointer(event, svg.node());
+                    const invertedPoint = currentTransform.invert([x, y]);
+                    const [lon, lat] = projection.invert(invertedPoint);
+                    epicenterLocation.lon = lon;
+                    epicenterLocation.lat = lat;
+                    updateEpicenterPosition();
+                })
+                .on('end', () => {
+                     autoFitAllVisiblePoints();
+                });
+
+            const epiGroup = epicenterLayer.append('g')
+                .attr('id', 'epicenter-mark')
+                .style('cursor', 'move')
+                .call(dragHandler);
+
+            const outerPath = "M -4,-20 L 4,-20 L 4,-4 L 20,-4 L 20,4 L 4,4 L 4,20 L -4,20 L -4,4 L -20,4 L -20,-4 L -4,-4 Z";
+            epiGroup.append('path')
+                .attr('d', outerPath)
+                .attr('transform', 'rotate(45)')
+                .attr('fill', '#FFFF00');
+
+            const innerPath = "M -2.5,-17.5 L 2.5,-17.5 L 2.5,-2.5 L 17.5,-2.5 L 17.5,2.5 L 2.5,2.5 L 2.5,17.5 L -2.5,17.5 L -2.5,2.5 L -17.5,2.5 L -17.5,-2.5 L -2.5,-2.5 Z";
+            epiGroup.append('path')
+                .attr('d', innerPath)
+                .attr('transform', 'rotate(45)')
+                .attr('fill', '#C80000');
+
+            updateEpicenterPosition();
+        }
+
+        function updateEpicenterPosition() {
+            const projected = projection([epicenterLocation.lon, epicenterLocation.lat]);
+            if (!projected) return;
+            const [x, y] = projected;
+            const tx = currentTransform.applyX(x);
+            const ty = currentTransform.applyY(y);
+            epicenterLayer.select('#epicenter-mark')
+                .attr('transform', `translate(${tx}, ${ty})`);
+        }
+
+        window.addEventListener('resize', () => {
+            width = container.clientWidth;
+            height = container.clientHeight;
+            
+            svg.attr('width', width).attr('height', height);
+            projection.translate([width / 2.3, height / 1.7]);
+
+            foreignLayer.selectAll('path').attr('d', path);
+            mapLayer.selectAll('path').attr('d', path);
+            areaBorderLayer.selectAll('path').attr('d', path);
+            prefBorderLayer.selectAll('path').attr('d', path);
+            
+            updateIconPositions();
+            updateEpicenterPosition();
+        });
+
+        document.getElementById('btn-reset-zoom').addEventListener('click', () => {
+            currentTransform = d3.zoomIdentity;
+            svg.call(zoom.transform, d3.zoomIdentity);
+        });
+
+        document.getElementById('btn-clear').addEventListener('click', () => {
+            icons = [];
+            renderIcons();
+            epicenterLocation.visible = false;
+            drawEpicenter();
+        });
+
+        document.getElementById('btn-download').addEventListener('click', () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+
+            ctx.fillStyle = '#264ed1';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const svgElement = document.getElementById('map-svg');
+            const serializer = new XMLSerializer();
+            let svgString = serializer.serializeToString(svgElement);
+            
+            if (!svgString.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
+                svgString = svgString.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+
+            const img = new Image();
+            const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+            const url = URL.createObjectURL(svgBlob);
+            
+            img.onload = () => {
+                ctx.drawImage(img, 0, 0);
+
+                const headerX = 24;
+                const headerY = 16;
+                const maxBoxWidth = 100;
+                const barHeight = 44;
+                
+                const maxLevelObj = shindoLevels.find(l => l.id === selectMaxShindo.value);
+                const maxBg = maxLevelObj ? maxLevelObj.bg : '#ff8c1a';
+                const maxFg = maxLevelObj ? maxLevelObj.fg : '#000000';
+
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+                ctx.shadowBlur = 8;
+                ctx.fillStyle = maxBg;
+                ctx.fillRect(headerX, headerY, maxBoxWidth, barHeight);
+
+                const infoGrad = ctx.createLinearGradient(headerX + maxBoxWidth, headerY, headerX + maxBoxWidth, headerY + barHeight);
+                infoGrad.addColorStop(0, '#5c7bb5');
+                infoGrad.addColorStop(1, '#3a548c');
+                ctx.fillStyle = infoGrad;
+                
+                const infoText = `${inputTime.value}   M${inputMag.value}`;
+                ctx.font = 'bold 16px sans-serif';
+                const textWidth = ctx.measureText(infoText).width;
+                const barWidth = textWidth + 60;
+                ctx.fillRect(headerX + maxBoxWidth, headerY, barWidth, barHeight);
+
+                if (selectMaxShindo.value === '7') {
+                    ctx.strokeStyle = '#FFFF00';
+                    ctx.lineWidth = 3.5;
+                } else {
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 2.5;
+                }
+                ctx.strokeRect(headerX, headerY, maxBoxWidth, barHeight);
+                
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2.5;
+                ctx.strokeRect(headerX + maxBoxWidth, headerY, barWidth, barHeight);
+
+                ctx.shadowBlur = 0; 
+
+                ctx.fillStyle = maxFg;
+                ctx.font = 'bold 10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('最大震度', headerX + maxBoxWidth / 2, headerY + 14);
+
+                ctx.font = '900 24px "Helvetica Neue", Arial, sans-serif';
+                if (selectMaxShindo.value.length > 1) {
+                    ctx.font = '900 16px "Helvetica Neue", Arial, sans-serif';
+                    ctx.fillText(selectMaxShindo.value, headerX + maxBoxWidth / 2, headerY + 33);
+                } else {
+                    ctx.fillText(selectMaxShindo.value, headerX + maxBoxWidth / 2, headerY + 36);
+                }
+
+                ctx.textAlign = 'left';
+                ctx.font = 'bold 16px "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif';
+                
+                const drawOutlineText = (txt, tx, ty, fill, stroke) => {
+                    ctx.strokeStyle = stroke;
+                    ctx.lineWidth = 3.5;
+                    ctx.strokeText(txt, tx, ty);
+                    ctx.fillStyle = fill;
+                    ctx.fillText(txt, tx, ty);
+                };
+
+                const timeText = inputTime.value;
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(timeText, headerX + maxBoxWidth + 20, headerY + 28);
+
+                const magText = `M${inputMag.value}`;
+                const timeWidth = ctx.measureText(timeText).width;
+                ctx.fillStyle = '#ffff00';
+                ctx.fillText(magText, headerX + maxBoxWidth + 20 + timeWidth + 20, headerY + 28);
+
+                const townLines = inputTowns.value.split('\n');
+                if (townLines.length > 0 && townLines[0].trim() !== '') {
+                    const townY = 80;
+                    const townX = 24;
+                    const townLineHeight = 24;
+                    const townPad = 8;
+                    const townBoxHeight = (townLines.length * townLineHeight) + (townPad * 2);
+                    const townBoxWidth = 150;
+
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+                    ctx.fillRect(townX, townY, townBoxWidth, townBoxHeight);
+
+                    ctx.fillStyle = '#ff8c1a';
+                    ctx.fillRect(townX, townY, 4, townBoxHeight);
+
+                    ctx.font = 'bold 14px "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif';
+                    ctx.textAlign = 'left';
+                    townLines.forEach((line, index) => {
+                        drawOutlineText(line.trim(), townX + 12, townY + townPad + 16 + (index * townLineHeight), '#ffffff', '#000000');
+                    });
+                }
+
+                const legW = 100;
+                const legH = 210;
+                const legX = width - legW - 20;
+                const legY = height - legH - 20;
+
+                ctx.fillStyle = 'rgba(15, 30, 50, 0.8)';
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+                ctx.lineWidth = 1;
+                ctx.fillRect(legX, legY, legW, legH);
+                ctx.strokeRect(legX, legY, legW, legH);
+
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('震度凡例', legX + legW / 2, legY + 16);
+
+                shindoLevels.forEach((level, index) => {
+                    const ly = legY + 30 + (index * 19);
+                    
+                    ctx.fillStyle = level.bg;
+                    ctx.fillRect(legX + 10, ly, 24, 14);
+                    if (level.id === '7') {
+                        ctx.strokeStyle = '#FFFF00';
+                        ctx.lineWidth = 1.5;
+                    } else {
+                        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+                        ctx.lineWidth = 0.5;
+                    }
+                    ctx.strokeRect(legX + 10, ly, 24, 14);
+
+                    ctx.fillStyle = level.fg;
+                    ctx.font = 'bold 9px sans-serif';
+                    ctx.fillText(level.label, legX + 22, ly + 11);
+
+                    ctx.fillStyle = '#cccccc';
+                    ctx.font = '9px sans-serif';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(`震度 ${level.id}`, legX + 38, ly + 11);
+                    ctx.textAlign = 'center';
+                });
+
+                const pngUrl = canvas.toDataURL('image/png');
+                const downloadLink = document.createElement('a');
+                downloadLink.href = pngUrl;
+                downloadLink.download = `NHK_shindo_${Date.now()}.png`;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+                URL.revokeObjectURL(url);
+            };
+            img.src = url;
+        });
+
+    </script>
+</body>
+</html>
